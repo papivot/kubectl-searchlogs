@@ -1,0 +1,104 @@
+#!/bin/bash
+
+# ==============================================================================
+# kubectl-searchlogs
+# A kubectl plugin to grep logs across all pods in a namespace, sorted by time.
+#
+# Options:
+#   -n <namespace>   : The namespace to search (Required).
+#   -t <time-window> : How far back to search (e.g., 30s, 5m, 1h).
+#
+# Arguments:
+#   <SEARCH_STRING>  : The string/regex to find in the logs.
+# ==============================================================================
+
+# --- Helper Functions ---
+
+print_usage() {
+    echo "Usage: kubectl searchlogs -n <NAMESPACE> -t <TIME_WINDOW> <SEARCH_STRING>"
+    echo ""
+    echo "Options:"
+    echo "  -n    Target namespace (Required)"
+    echo "  -t    Time window (Required). Formats: s (seconds), m (minutes), h (hours)"
+    echo "        Example: -t 10m (last 10 minutes), -t 4h (last 4 hours)"
+    echo "  -h    Show this help message"
+    echo ""
+    echo "Example:"
+    echo "  kubectl searchlogs -n payment-service -t 1h 'Transaction Failed'"
+}
+
+NAMESPACE=""
+TIME_WINDOW=""
+
+while getopts "n:t:h" opt; do
+    case ${opt} in
+        n) NAMESPACE="$OPTARG" ;;
+        t) TIME_WINDOW="$OPTARG" ;;
+        h) print_usage; exit 0 ;;
+        *) print_usage; exit 1 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+SEARCH_STRING="$1"
+
+if [[ -z "$NAMESPACE" ]]; then
+    echo "Error: Namespace (-n) is required."
+    print_usage
+    exit 1
+fi
+
+if [[ -z "$TIME_WINDOW" ]]; then
+    echo "Error: Time window (-t) is required."
+    print_usage
+    exit 1
+fi
+
+if [[ -z "$SEARCH_STRING" ]]; then
+    echo "Error: Search string is missing."
+    print_usage
+    exit 1
+fi
+
+# Validate time format (simple check if it ends in s, m, or h)
+if ! [[ "$TIME_WINDOW" =~ ^[0-9]+[smh]$ ]]; then
+    echo "Error: Invalid time format '$TIME_WINDOW'. Use <number><unit> (e.g., 30s, 5m, 1h)."
+    exit 1
+fi
+
+# Check if namespace exists
+if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
+    echo "Error: Namespace '$NAMESPACE' not found."
+    exit 1
+fi
+
+# Fetch list of pods
+PODS=$(kubectl get pods -n "$NAMESPACE" --no-headers -o custom-columns=":metadata.name")
+
+if [ -z "$PODS" ]; then
+    echo "No pods found in namespace '$NAMESPACE'."
+    exit 0
+fi
+
+export NAMESPACE
+export TIME_WINDOW
+
+# We use sed to reformat the timestamp before printing.
+# Logic:
+# 1. Capture Date (Group 1): ^\(....-..-..\)
+# 2. Match 'T' separator
+# 3. Capture Time (Group 2): \(..:..:..\)
+# 4. Match and discard nanoseconds/Z: \.[0-9]*Z
+# 5. Replacement: \1 \2 [{}]
+#    - \1 \2 puts date and time back with a space in between.
+#    - [{}] inserts the pod name.
+
+echo "$PODS" | \
+xargs -P 8 -I {} sh -c '
+    TAB="$(printf "\t")"
+
+    kubectl logs -n "$NAMESPACE" "{}" --all-containers --since="$TIME_WINDOW" --timestamps 2>/dev/null | \
+    sed "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /\1 \2${TAB}[{}]${TAB}/"
+' | \
+grep --color=always "$SEARCH_STRING" | \
+sort
