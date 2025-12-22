@@ -5,30 +5,43 @@
 # A kubectl plugin to grep logs across all pods in a namespace, sorted by time.
 #
 # Options:
-#   -n <namespace>   : The namespace to search (Required).
-#   -t <time-window> : How far back to search (e.g., 30s, 5m, 1h).
+#   -n <namespace>   : The namespace to search (Optional, defaults to current context).
+#   -t <time-window> : How far back to search (Optional, defaults to 30m).
 #
 # Arguments:
 #   <SEARCH_STRING>  : The string/regex to find in the logs.
 # ==============================================================================
 
-# --- Helper Functions ---
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Check for kubectl dependency
+if ! command -v kubectl &> /dev/null; then
+    echo -e "${RED}Error: kubectl is not installed or not in PATH.${NC}"
+    exit 1
+fi
 
 print_usage() {
-    echo "Usage: kubectl searchlogs -n <NAMESPACE> -t <TIME_WINDOW> <SEARCH_STRING>"
+    echo "Usage: kubectl searchlogs [-n <NAMESPACE>] [-t <TIME_WINDOW>] <SEARCH_STRING>"
     echo ""
     echo "Options:"
-    echo "  -n    Target namespace (Required)"
-    echo "  -t    Time window (Required). Formats: s (seconds), m (minutes), h (hours)"
+    echo "  -n    Target namespace (Default: current context namespace)"
+    echo "  -t    Time window (Default: 30m). Formats: s (seconds), m (minutes), h (hours)"
     echo "        Example: -t 10m (last 10 minutes), -t 4h (last 4 hours)"
     echo "  -h    Show this help message"
     echo ""
     echo "Example:"
     echo "  kubectl searchlogs -n payment-service -t 1h 'Transaction Failed'"
+    echo "  kubectl searchlogs 'Error' (uses default namespace and 30m)"
 }
 
 NAMESPACE=""
-TIME_WINDOW=""
+TIME_WINDOW="30m"
 
 while getopts "n:t:h" opt; do
     case ${opt} in
@@ -42,33 +55,33 @@ shift $((OPTIND -1))
 
 SEARCH_STRING="$1"
 
+# Determine namespace if not provided
 if [[ -z "$NAMESPACE" ]]; then
-    echo "Error: Namespace (-n) is required."
-    print_usage
-    exit 1
-fi
+    # Try to get current namespace from kubectl config
+    NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null)
 
-if [[ -z "$TIME_WINDOW" ]]; then
-    echo "Error: Time window (-t) is required."
-    print_usage
-    exit 1
+    # If still empty (e.g. no context set or explicit default), default to 'default'
+    if [[ -z "$NAMESPACE" ]]; then
+        NAMESPACE="default"
+    fi
+    echo -e "${YELLOW}Using namespace: ${NAMESPACE}${NC}" >&2
 fi
 
 if [[ -z "$SEARCH_STRING" ]]; then
-    echo "Error: Search string is missing."
+    echo -e "${RED}Error: Search string is missing.${NC}"
     print_usage
     exit 1
 fi
 
 # Validate time format (simple check if it ends in s, m, or h)
 if ! [[ "$TIME_WINDOW" =~ ^[0-9]+[smh]$ ]]; then
-    echo "Error: Invalid time format '$TIME_WINDOW'. Use <number><unit> (e.g., 30s, 5m, 1h)."
+    echo -e "${RED}Error: Invalid time format '$TIME_WINDOW'. Use <number><unit> (e.g., 30s, 5m, 1h).${NC}"
     exit 1
 fi
 
 # Check if namespace exists
 if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
-    echo "Error: Namespace '$NAMESPACE' not found."
+    echo -e "${RED}Error: Namespace '$NAMESPACE' not found.${NC}"
     exit 1
 fi
 
@@ -76,29 +89,29 @@ fi
 PODS=$(kubectl get pods -n "$NAMESPACE" --no-headers -o custom-columns=":metadata.name")
 
 if [ -z "$PODS" ]; then
-    echo "No pods found in namespace '$NAMESPACE'."
+    echo -e "${YELLOW}No pods found in namespace '$NAMESPACE'.${NC}"
     exit 0
 fi
 
 export NAMESPACE
 export TIME_WINDOW
+# Export colors for subshell
+export C_CYAN=$(printf "${CYAN}")
+export C_GREEN=$(printf "${GREEN}")
+export C_NC=$(printf "${NC}")
 
-# We use sed to reformat the timestamp before printing.
 # Logic:
-# 1. Capture Date (Group 1): ^\(....-..-..\)
-# 2. Match 'T' separator
-# 3. Capture Time (Group 2): \(..:..:..\)
-# 4. Match and discard nanoseconds/Z: \.[0-9]*Z
-# 5. Replacement: \1 \2 [{}]
-#    - \1 \2 puts date and time back with a space in between.
-#    - [{}] inserts the pod name.
+# 1. kubectl logs ...
+# 2. sed to reformat timestamp and add colors
+#    Original: YYYY-MM-DDTHH:MM:SS.nsZ ...
+#    Target:   [CYAN]YYYY-MM-DD HH:MM:SS[NC] [GREEN][pod-name][NC] ...
 
 echo "$PODS" | \
 xargs -P 8 -I {} sh -c '
     TAB="$(printf "\t")"
 
     kubectl logs -n "$NAMESPACE" "{}" --all-containers --since="$TIME_WINDOW" --timestamps 2>/dev/null | \
-    sed "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /\1 \2${TAB}[{}]${TAB}/"
+    sed "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /${C_CYAN}\1 \2${C_NC}${TAB}${C_GREEN}[{}]${C_NC}${TAB}/"
 ' | \
 grep --color=always "$SEARCH_STRING" | \
 sort
