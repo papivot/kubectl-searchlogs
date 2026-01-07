@@ -1,12 +1,11 @@
 # kubectl-searchlogs
 
-A `kubectl` plugin to grep logs across all pods in a namespace, sorted by time. This tool is useful for debugging issues that span multiple pods or services, allowing you to see a chronological view of events matching a search term.
+A `kubectl` plugin to grep logs across all pods in a namespace, sorted by time. This tool is helpful for debugging issues spanning multiple pods or services, allowing you to view a chronological timeline of events matching a search term.
 
 ## Features
 
 - **Search across all pods**: Greps logs from every pod in the specified namespace.
 - **Unified Timeline**: Merges and sorts logs from all pods by timestamp.
-- **Colorized Output**: Distinguishes timestamps, pod names, and matched search terms for better readability.
 - **Smart Defaults**:
   - Automatically detects the current namespace if not provided.
   - Defaults to searching the last 30 minutes.
