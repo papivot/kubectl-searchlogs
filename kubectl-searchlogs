@@ -101,14 +101,39 @@ export TIME_WINDOW
 # export C_NC=$(printf "${NC}")
 
 echo "$PODS" | \
-xargs -P 8 -I {} sh -c '
+xargs -P 4 -I {} sh -c '
     TAB="$(printf "\t")"
 
-    kubectl logs -n "$NAMESPACE" "{}" --all-containers --since="$TIME_WINDOW" --timestamps 2>/dev/null | \
-    sed -e "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /\1 \2${TAB}[{}]${TAB}/" \
-        -e "s/${TAB}[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}Z[[:space:]]*/${TAB}/"
-' | \
-grep --color=always "$SEARCH_STRING" | \
-sort
+    stdbuf -oL kubectl logs -n "$NAMESPACE" "{}" --all-containers --since="$TIME_WINDOW" --timestamps 2>/dev/null | \
+    stdbuf -oL awk -v pod="{}" '\''
+    {
+        # 1. Capture Timestamp (Field 1)
+        ts = $1
 
-#    sed "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /${C_CYAN}\1 \2${C_NC}${TAB}${C_GREEN}[{}]${C_NC}${TAB}/"
+        # 2. Capture the Message (Everything after the first space)
+        # We use index/substr to preserve exact original spacing
+        first_space = index($0, " ")
+        if (first_space == 0) { next } # Skip empty/malformed lines
+        msg = substr($0, first_space + 1)
+
+        # 3. SANITIZE: Remove Carriage Returns (\r)
+        # This fixes the "2026-01-07 02:42:5o1" corruption issue
+        gsub(/\r/, "", msg)
+
+        # 4. Extract clean Date and Time
+        d = substr(ts, 1, 10)
+        t = substr(ts, 12, 8)
+
+        # 5. Handle Double Timestamps (e.g. "2026-01-06T..." inside the message)
+        if (msg ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T/) {
+            sub(/^[^ ]+[ ]+/, "", msg)
+        }
+
+        # 6. Print with Tabs ONLY between columns
+        # Format: DATE TIME <TAB> [POD] <TAB> MSG
+        printf "%s %s\t[%s]\t%s\n", d, t, pod, msg
+    }
+    '\''
+' | \
+grep --line-buffered --color=always "$SEARCH_STRING" | \
+sort
