@@ -30,14 +30,14 @@ print_usage() {
     echo "Usage: kubectl searchlogs [-n <NAMESPACE>] [-t <TIME_WINDOW>] <SEARCH_STRING>"
     echo ""
     echo "Options:"
-    echo "  -n    Target namespace (Default: current context namespace)"
+    echo "  -n    Target namespace (Default: current context namespace)."
     echo "  -t    Time window (Default: 30m). Formats: s (seconds), m (minutes), h (hours)"
     echo "        Example: -t 10m (last 10 minutes), -t 4h (last 4 hours)"
-    echo "  -h    Show this help message"
+    echo "  -h    Show this help message."
     echo ""
     echo "Example:"
     echo "  kubectl searchlogs -n payment-service -t 1h 'Transaction Failed'"
-    echo "  kubectl searchlogs 'Error' (uses default namespace and 30m)"
+    echo "  kubectl searchlogs 'Error' (uses default namespace and 30m.)"
 }
 
 NAMESPACE=""
@@ -57,10 +57,10 @@ SEARCH_STRING="$1"
 
 # Determine namespace if not provided
 if [[ -z "$NAMESPACE" ]]; then
-    # Try to get current namespace from kubectl config
+    # Try to get the current namespace from kubectl config
     NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}' 2>/dev/null)
 
-    # If still empty (e.g. no context set or explicit default), default to 'default'
+    # If still empty (e.g., no context set or explicit default), default to 'default'
     if [[ -z "$NAMESPACE" ]]; then
         NAMESPACE="default"
     fi
@@ -96,22 +96,19 @@ fi
 export NAMESPACE
 export TIME_WINDOW
 # Export colors for subshell
-export C_CYAN=$(printf "${CYAN}")
-export C_GREEN=$(printf "${GREEN}")
-export C_NC=$(printf "${NC}")
-
-# Logic:
-# 1. kubectl logs ...
-# 2. sed to reformat timestamp and add colors
-#    Original: YYYY-MM-DDTHH:MM:SS.nsZ ...
-#    Target:   [CYAN]YYYY-MM-DD HH:MM:SS[NC] [GREEN][pod-name][NC] ...
+# export C_CYAN=$(printf "${CYAN}")
+# export C_GREEN=$(printf "${GREEN}")
+# export C_NC=$(printf "${NC}")
 
 echo "$PODS" | \
 xargs -P 8 -I {} sh -c '
     TAB="$(printf "\t")"
 
     kubectl logs -n "$NAMESPACE" "{}" --all-containers --since="$TIME_WINDOW" --timestamps 2>/dev/null | \
-    sed "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /${C_CYAN}\1 \2${C_NC}${TAB}${C_GREEN}[{}]${C_NC}${TAB}/"
+    sed -e "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /\1 \2${TAB}[{}]${TAB}/" \
+        -e "s/${TAB}[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}Z[[:space:]]*/${TAB}/"
 ' | \
 grep --color=always "$SEARCH_STRING" | \
 sort
+
+#    sed "s/^\(....-..-..\)T\(..:..:..\)\.[0-9]*Z /${C_CYAN}\1 \2${C_NC}${TAB}${C_GREEN}[{}]${C_NC}${TAB}/"
